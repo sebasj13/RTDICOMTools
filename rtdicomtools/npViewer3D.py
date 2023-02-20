@@ -15,11 +15,9 @@ class NumpyViewer3D(ctk.CTk):
         
         self.apptitle = ("3D Numpy Viewer")
         self.author = "Sebastian Schäfer"
-        self.version = "0.1"
+        self.version = "1.0"
         self.title(f"{self.apptitle} v{self.version} by {self.author}")
 
-        self.iconpath = os.path.join(os.path.dirname(__file__), "uke_logo.ico")
-        self.iconbitmap(self.iconpath)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
 

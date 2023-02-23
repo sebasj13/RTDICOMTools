@@ -27,6 +27,7 @@ setuptools.setup(
         "matplotlib",
         "pandas",
         "pydicom",
+        "imutils"
         "customtkinter"
     ],
     packages=[

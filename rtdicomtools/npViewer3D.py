@@ -158,9 +158,7 @@ class NumpyViewer3D(ctk.CTk):
    
             image = array[slice,:,:] 
    
-            image = Image.fromarray(image)
-            size = min([self.winfo_width(), self.winfo_height()])
-            image = image.resize((size, size), Image.LANCZOS)
+            image = self.resize(Image.fromarray(image))
 
             return ImageTk.PhotoImage(image)
             
@@ -172,6 +170,27 @@ class NumpyViewer3D(ctk.CTk):
             self.image = self.array_to_image(self.parent.image_data, self.parent.index)
             self.label.config(image = self.image)
             self.label.image = self.image
+            
+        def resize(self, image: Image):
+            try:
+                aspect_ratio = image.size[0]/image.size[1]
+                if aspect_ratio == 1:
+                    size = min([self.winfo_width(), self.winfo_height()])
+                    image = image.resize((size,size))
+                elif self.winfo_width() < self.winfo_height():
+                    if aspect_ratio > 1:
+                        image = image.resize((self.winfo_width(), int(self.winfo_width()/aspect_ratio)))
+                    else:
+                        image = image.resize((int(self.winfo_height()*aspect_ratio), self.winfo_height()))
+                else:
+                    if aspect_ratio > 1:
+                        image = image.resize((self.winfo_width(), int(self.winfo_width()/aspect_ratio)))
+                    else:
+                        image = image.resize((int(self.winfo_height()*aspect_ratio), self.winfo_height()))
+            except Exception:
+                return image
+            finally:
+                return image
 
     class TripleFrame(ctk.CTkFrame):
         """Shows the three different views of the array side by side.
@@ -262,10 +281,8 @@ class NumpyViewer3D(ctk.CTk):
                     elif line_direction == "y":
                         cv2.line(image, (0, line_index), (image.shape[1], line_index), (255, 0, 0), 1)
 
-                image = Image.fromarray(image)
-                size = min([self.label.winfo_height(), self.winfo_width()])
-                image = image.resize((size,size), Image.LANCZOS)
-
+                image = self.resize(Image.fromarray(image))
+                
                 return ImageTk.PhotoImage(image)
                 
             def update_image(self, line_index=None, line_direction=None):
@@ -275,6 +292,27 @@ class NumpyViewer3D(ctk.CTk):
                 self.image = self.array_to_image(self.ref_image_data, self.index,  line_index=line_index, line_direction=line_direction,)
                 self.label.config(image = self.image)
                 self.label.image = self.image
+                
+            def resize(self, image: Image):
+                try:
+                    aspect_ratio = image.size[0]/image.size[1]
+                    if aspect_ratio == 1:
+                        size = min([self.winfo_width(), self.winfo_height()])
+                        image = image.resize((size,size))
+                    elif self.winfo_width() < self.winfo_height():
+                        if aspect_ratio > 1:
+                            image = image.resize((self.winfo_width(), int(self.winfo_width()/aspect_ratio)))
+                        else:
+                            image = image.resize((int(self.winfo_height()*aspect_ratio), self.winfo_height()))
+                    else:
+                        if aspect_ratio > 1:
+                            image = image.resize((self.winfo_width(), int(self.winfo_width()/aspect_ratio)))
+                        else:
+                            image = image.resize((int(self.winfo_height()*aspect_ratio), self.winfo_height()))
+                except Exception:
+                    return image
+                finally:
+                    return image
 
             def update_index_label(self, value):
                     

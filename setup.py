@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="rtdicomtools",
-    version="1.0.0",
+    version="1.0.1",
     author="Sebastian Schäfer",
     author_email="se.schaefer@uke.de",
     description="",

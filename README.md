@@ -35,6 +35,7 @@ This class serves as the visuialization engine for some of the results produced 
 # dcmStructureSet
 
 This class is initialized with the path to a RTSTRUCT file. It can then be used to extract the structure names and their corresponding contours without the need for the referenced CT dataset. This is useful for when you have a RTSTRUCT file but not the CT dataset that it references - for example, when you have a RTSTRUCT file from a vendor that you want to use with a different treatment planning system, or patient privacy concerns prevent you from sharing the CT dataset.
+If the CT dataset is available, the contours can be drawn in the same scale as the CT dataset. This is useful for when you want to visualize the contours on top of the CT dataset.
 
 ## Methods
 

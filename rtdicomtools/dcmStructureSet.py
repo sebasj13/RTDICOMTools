@@ -1,11 +1,8 @@
 import cv2
 import pydicom
 import numpy as np
-from dataclasses import dataclass
+from pydicom.pixel_data_handlers import apply_rescale
 
-import matplotlib.pyplot as plt
-
-@dataclass
 class StructureSetContour:
     """A class to store the relevant countour information of a RTStruct structure.
     """
@@ -63,12 +60,13 @@ class DICOMStructureSet:
     If a CT is supplied, the underlying pixel array of the CT can be used to draw the contours on the CT slices.
     """ 	
     
-    def __init__(self, RTStruct, CT: list = None) -> None:
+    def __init__(self, RTStruct, CT: list = None, ignore_for: bool = False) -> None:
         """Initializes the DICOMStructureSet class.
 
         Args:
             RTStruct (pathlike or pydicom.FileDataset): The path to the DICOM RTSTRUCT file or the dataset containing the DICOM information.
-            CT (list, optional): List of paths to the CT DICOM files. Defaults to None.	
+            CT (list, optional): List of paths to the CT DICOM files. Defaults to None.
+            ignore_for (bool, optional): Ignore the Frame of Reference check. Defaults to False.	
         """
         
         if type(RTStruct) == str:
@@ -84,26 +82,34 @@ class DICOMStructureSet:
         if CT != None:
             referenced_images = [i.ReferencedSOPInstanceUID for i in ds.ReferencedFrameOfReferenceSequence[0].RTReferencedStudySequence[0].RTReferencedSeriesSequence[0].ContourImageSequence]
             reference_images = {}
+            self.image_position_patients = []
             for file in CT:
-                ct = pydicom.dcmread(file)
-                array = np.array(ct.pixel_array.copy(), dtype=np.float64)
-                array -= np.min(array)
-                array /= np.max(array)
-                array *= 255
+                if isinstance(file, str):
+                    ct = pydicom.dcmread(file)
+                else:
+                    ct = file
+
+                f = lambda x : 51*x/160 + 459/4
+
+                
+                array = apply_rescale(ct.pixel_array.copy(), ct)
+                array[array <= -360 ] = -360
+                array[array >= 440] = 440
+                array = f(array)
+                array = array.astype(int)
                 reference_images[int(ct.InstanceNumber)-1] = (ct.SOPInstanceUID, array, ct.ImagePositionPatient[2])
-                
-            if set(referenced_images) != set([i[0] for i in reference_images.values()]):
+                self.image_position_patients.append(ct.ImagePositionPatient[2])
+            if set(referenced_images) != set([i[0] for i in reference_images.values()]) and ignore_for == False:
                 raise ValueError("The CTs do not match the RTSTRUCT file.")
-                
             self.slices = []
-            flip = reference_images[0][2] > reference_images[1][2]
+            flip = reference_images[min(reference_images.keys())][2] > reference_images[max(reference_images.keys())][2]
             for key in sorted(reference_images.keys(), reverse= flip):
                 self.slices.append(reference_images[key][1])
-                
+            
             self.slices = np.array(self.slices, dtype=np.uint8)
 
-            self._image_width = self.slices.shape[1]
-            self._image_height = self.slices.shape[0]
+            self._image_width = self.slices.shape[2]
+            self._image_height = self.slices.shape[1]
             self._dimensions = (self._image_width, self._image_height, 3)
             self._pixel_spacing = 1/ct.PixelSpacing[0]
             self._center = (-1*int(ct.ImagePositionPatient[0]/ct.PixelSpacing[0]), -1*int(ct.ImagePositionPatient[1]/ct.PixelSpacing[1]))
@@ -143,9 +149,12 @@ class DICOMStructureSet:
         """
         available_structures = {}
         for i in range(len(ds.StructureSetROISequence)):
-            ROIName = ds.StructureSetROISequence[i].ROIName
-            ROINumber = ds.StructureSetROISequence[i].ROINumber
-            available_structures[ROIName] = ROINumber	
+            try:
+                if ds.ROIContourSequence[i].ContourSequence[0].ContourGeometricType == "CLOSED_PLANAR":
+                    ROIName = ds.StructureSetROISequence[i].ROIName
+                    ROINumber = ds.StructureSetROISequence[i].ROINumber
+                    available_structures[ROIName] = ROINumber	
+            except AttributeError as e: print(e)
             
         return available_structures
             
@@ -160,18 +169,19 @@ class DICOMStructureSet:
         """
         structure_contours = {}
         for i in range(len(ds.StructureSetROISequence)):
-            name = ds.StructureSetROISequence[i].ROIName
-            color = ds.ROIContourSequence[i].ROIDisplayColor
-            contours =  [ ds.ROIContourSequence[i].ContourSequence[j].ContourData 
-            for j in range(len(ds.ROIContourSequence[i].ContourSequence))]
-            slices = []
-            for k in range(len(contours)):      
-                contours[k] = np.array(contours[k]).reshape(-1,3)
-                slices += [contours[k][0][2]]
-                contours[k] = contours[k][:,0:2]      
-        
-            structure_contours[name] = StructureSetContour(name, color, contours, slices)
-        
+            try: 
+                name = ds.StructureSetROISequence[i].ROIName
+                color = ds.ROIContourSequence[i].ROIDisplayColor
+                contours =  [ ds.ROIContourSequence[i].ContourSequence[j].ContourData 
+                for j in range(len(ds.ROIContourSequence[i].ContourSequence))]
+                slices = []
+                for k in range(len(contours)):      
+                    contours[k] = np.array(contours[k]).reshape(-1,3)
+                    slices += [contours[k][0][2]]
+                    contours[k] = contours[k][:,0:2]      
+            
+                structure_contours[name] = StructureSetContour(name, color, contours, slices)
+            except AttributeError as e: print(e)
         return structure_contours
             
     def _setSlices(self) -> dict:
@@ -181,6 +191,7 @@ class DICOMStructureSet:
             dict: Dictionary which translates the slice number to the index of the array.	
         """
         
+        """"""
         slices=[]
         for Structure in self.getAvailableStructureNames():
             for slice_number in self._StructureContours[Structure].getSlices():
@@ -189,11 +200,15 @@ class DICOMStructureSet:
                     
         slices.sort()
         slice_dict = {x:i for i, x in enumerate(slices)}
+
+        try:
+            self.image_position_patients.sort()
+            slice_dict = {x:i for i, x in enumerate(self.image_position_patients)}
+        except AttributeError: pass
         
         return slice_dict
 
-    
-    def DrawAllContours(self, ct:bool = False) -> np.ndarray:
+    def DrawAllContours(self, ct:bool = False, fill_ptv: str = None, resample:int = 1) -> np.ndarray:
         """Draw all the contours of all the structures in the structure set.
         
         Args:	
@@ -203,24 +218,50 @@ class DICOMStructureSet:
             np.ndarray: Array of the slices with the contours of all the structures.
         """
         if ct:
-            images = [np.array(cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)) for image in self.slices]
-            images = np.array(images)
             center = self._center
+            if resample > 1:
+                self._pixel_spacing *= resample
+                images = np.array([cv2.resize(np.array(cv2.cvtColor(i, cv2.COLOR_GRAY2RGB)), dsize=None, fx=resample, fy=resample, interpolation=cv2.INTER_LANCZOS4) for i in self.slices])
+            else:
+                images = np.array([np.array(cv2.cvtColor(image, cv2.COLOR_GRAY2RGB))for image in self.slices])
         else:
             images = [np.zeros(self._dimensions, dtype=np.uint8) for i in range(len(self._Slices))]
-            
+
+        if not ct:
+            if hasattr(self, "_center")==False:
+                n=images[0].shape
+                center = (int(n[1]/2), int(n[0]/2))
+
+                min_contour = 10000
+                max_contour = -10000
+                for s in self.getAvailableStructureNames():
+                    min_contour = min(min_contour, np.min([min(points[:,1]) for points in self._StructureContours[s].getContours()]))
+                    max_contour = max(max_contour, np.max([max(points[:,1]) for points in self._StructureContours[s].getContours()]))
+
+                center = (int(n[1]/2), int(n[0]/2)-int((max_contour+min_contour)/2))
+            else:
+                center = self._center
+    
         for Structure in self.getAvailableStructureNames():
+
             for contour, slice in zip(self._StructureContours[Structure].getContours(), self._StructureContours[Structure].getSlices()):
                 points = np.array(contour* self.getPixelSpacing(), dtype=np.int32) 
-                if not ct:
-                    center = (int((n:=images[self._Slices[slice]].shape)[1]/2), int(n[0]/2))
-                points[:,0] += center[0]
-                points[:,1] += center[1]
-                cv2.drawContours(images[self._Slices[slice]], [points], 0, self._StructureContours[Structure].getColor(), 1) 
+                points[:,0] += center[0]*resample
+                points[:,1] += center[1]*resample
 
+                cv2.drawContours(images[self._Slices[slice]], [points], 0, self._StructureContours[Structure].getColor(), 1) 
+                if fill_ptv != None:
+                    if Structure == fill_ptv:
+                        temp = images[self._Slices[slice]].copy()
+                        cv2.fillPoly(temp, [points], self._StructureContours[Structure].getColor())
+                        alpha = 0.7
+                        frame_overlay=cv2.addWeighted(images[self._Slices[slice]], alpha, temp ,1-alpha, gamma=0)
+                        images[self._Slices[slice]] = frame_overlay
+        if resample > 1:
+            self._pixel_spacing /= resample
         return np.array(images)
     
-    def DrawStructureContours(self, Structure:str, RemoveEmptySlices:bool = True, ct:bool = False) -> np.ndarray:
+    def DrawStructureContours(self, Structure:str, RemoveEmptySlices:bool = True, ct:bool = False, fill:bool = False, fill_value= None) -> np.ndarray:
         """_summary_
 
         Args:
@@ -228,6 +269,8 @@ class DICOMStructureSet:
             RemoveEmptySlices (bool, optional): Restrict the output array size the the slices which
             contain the structure, or return all the slices. Defaults to True.
             ct (bool, optional): If the contours are drawn on a CT image. Defaults to False.	
+            fill (bool, optional): Whether or not to fill the contour. Defaults to False.
+            fill_value (int, optional): Value to fill the contour with. Defaults to None.
 
         Returns:
             np.ndarray: Array of the slices with the contours of the structure.	
@@ -236,17 +279,37 @@ class DICOMStructureSet:
         if ct:
             images = self.slices.copy()
             center = self._center
+            color = (255, 255, 255)
         else:
             images = [np.zeros(self._dimensions, dtype=np.uint8) for i in range(len(self._Slices))]
+            if hasattr(self, "_center")==False:
+                n=images[0].shape
+                center = (int(n[1]/2), int(n[0]/2))
+
+                min_contour = 10000
+                max_contour = -10000
+                for s in self.getAvailableStructureNames():
+                    min_contour = min(min_contour, np.min([min(points[:,1]) for points in self._StructureContours[s].getContours()]))
+                    max_contour = max(max_contour, np.max([max(points[:,1]) for points in self._StructureContours[s].getContours()]))
+
+                #center = (int(n[1]/2), int(n[0]/2)-int((max_contour+min_contour)/2))
+            else:
+                center = self._center
+
+            color = self._StructureContours[Structure].getColor()
             
         for contour, slice in zip(self._StructureContours[Structure].getContours(), self._StructureContours[Structure].getSlices()):
             points = np.array(contour* self.getPixelSpacing(), dtype=np.int32) 
-            if not ct:
-                center = (int((n:=images[self._Slices[slice]].shape)[1]/2), int(n[0]/2))
             points[:,0] += center[0]
             points[:,1] += center[1]
-            cv2.drawContours(images[self._Slices[slice]], [points], 0, self._StructureContours[Structure].getColor(), 1)             
-       
+    
+            if fill: 
+                if fill_value == None:
+                    cv2.fillPoly(images[self._Slices[slice]], [points], color)
+                else:
+                    cv2.fillPoly(images[self._Slices[slice]], [points], fill_value)
+            else: cv2.drawContours(images[self._Slices[slice]], [points], 0, color, 1) 
+
         if RemoveEmptySlices:
             images = [image for image in images if not np.all(image == 0)]
 
@@ -271,18 +334,31 @@ class DICOMStructureSet:
             center = self._center
         else:
             image = np.zeros(self._dimensions, dtype=np.uint8)
+            if hasattr(self, "_center")==False:
+                n=images[0].shape
+                center = (int(n[1]/2), int(n[0]/2))
+
+                min_contour = 10000
+                max_contour = -10000
+                for s in self.getAvailableStructureNames():
+                    min_contour = min(min_contour, np.min([min(points[:,1]) for points in self._StructureContours[s].getContours()]))
+                    max_contour = max(max_contour, np.max([max(points[:,1]) for points in self._StructureContours[s].getContours()]))
+
+                center = (int(n[1]/2), int(n[0]/2)-int((max_contour+min_contour)/2))
+            else:
+                center = self._center
             
         if Structure not in self.getAvailableStructureNames():
             raise ValueError("The specified structure is not available")
         
         if Slice not in self._Slices.keys():
             raise ValueError("The specified slice is not available")
+        
+        
             
         for contour, slice in zip(self._StructureContours[Structure].getContours(), self._StructureContours[Structure].getSlices()):
             if self._Slices[slice] == Slice:
                 points = np.array(contour* self.getPixelSpacing(), dtype=np.int32) 
-                if not ct:
-                    center = (int((n:=images[self._Slices[slice]].shape)[1]/2), int(n[0]/2))
                 points[:,0] += center[0]
                 points[:,1] += center[1]
                 cv2.drawContours(images[self._Slices[slice]], [points], 0, self._StructureContours[Structure].getColor(), 1)             
